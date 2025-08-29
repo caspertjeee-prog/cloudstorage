@@ -10,8 +10,8 @@
     #app { position:fixed; inset:0; }
     .hint { position:fixed; left:12px; bottom:12px; color:#fff; font:12px system-ui;
             background:rgba(0,0,0,.45); padding:6px 8px; border-radius:6px; }
-    .debug { position:fixed; right:12px; bottom:12px; color:#fff; font:12px system-ui; opacity:.85; }
   </style>
+  <!-- Import map to resolve "three" in the browser -->
   <script type="importmap">
   {
     "imports": {
@@ -23,7 +23,6 @@
 <body>
   <canvas id="app"></canvas>
   <div class="hint">Drag to rotate • Scroll to zoom</div>
-  <div class="debug" id="debug">loading…</div>
   <script type="module" src="./main.js"></script>
 </body>
 </html>
