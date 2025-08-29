@@ -22,43 +22,49 @@ controls.enableDamping = true;
 controls.enablePan = false;
 controls.minDistance = 2.0;
 controls.maxDistance = 12.0;
-controls.minPolarAngle = 0.05; // allow almost full vertical orbit
+controls.minPolarAngle = 0.05;
 controls.maxPolarAngle = Math.PI - 0.05;
 
-// Optional subtle light; main lighting can come from environment
+// Ambient light for a tiny bit of lift (sprites glow via additive blending)
 scene.add(new THREE.AmbientLight(0xffffff, 0.4));
 
-// --- HDRI background/environment (no debug text)
+// --- HDRI background/environment
 new RGBELoader().setPath('./').load('hdri.hdr', (hdr)=>{
   hdr.mapping = THREE.EquirectangularReflectionMapping;
-  scene.background = hdr;            // visible background
-  scene.environment = hdr;           // simple env for orb material
+  scene.background = hdr;
+  scene.environment = hdr;
 });
 
-// --- Orb field (InstancedMesh for performance)
+// ---------------- Glowing “orbs” as sprites (Points) ----------------
 const ORB_COUNT = 500;
-const R_MIN = 12;   // ensure many orbs beyond max zoom
+const R_MIN = 12;   // keep many orbs behind you even fully zoomed out
 const R_MAX = 30;
+const SPEED   = 0.35; // units/sec — slow & constant
 
-const orbGeo = new THREE.SphereGeometry(0.15, 24, 16);
-const orbMat = new THREE.MeshStandardMaterial({
-  color: 0xeeeeff,
-  roughness: 0.4,
-  metalness: 0.0,
-  envMapIntensity: 0.4
-});
-const orbs = new THREE.InstancedMesh(orbGeo, orbMat, ORB_COUNT);
-scene.add(orbs);
+// Soft radial sprite texture (glow)
+function makeSoftSprite(size=256){
+  const c=document.createElement('canvas'); c.width=c.height=size;
+  const ctx=c.getContext('2d');
+  const g=ctx.createRadialGradient(size/2,size/2,0,size/2,size/2,size/2);
+  g.addColorStop(0.00,'rgba(255,255,255,0.95)');
+  g.addColorStop(0.35,'rgba(255,255,255,0.35)');
+  g.addColorStop(1.00,'rgba(255,255,255,0.00)');
+  ctx.fillStyle=g; ctx.fillRect(0,0,size,size);
+  const tex=new THREE.CanvasTexture(c);
+  tex.minFilter=THREE.LinearFilter; tex.magFilter=THREE.LinearFilter;
+  return tex;
+}
+const spriteTex = makeSoftSprite();
 
-const dummy = new THREE.Object3D();
-const positions = new Array(ORB_COUNT);
+// Geometry & data
+const geom = new THREE.BufferGeometry();
+const pos = new Float32Array(ORB_COUNT*3);
 const velocities = new Array(ORB_COUNT);
 
-function randomInShell(r0, r1){
-  // sample a random direction and radius between r0..r1
-  const u = Math.random(); const v = Math.random();
-  const theta = 2*Math.PI*u; const phi = Math.acos(2*v-1);
-  const dir = new THREE.Vector3(
+function randomInShell(r0,r1){
+  const u=Math.random(), v=Math.random();
+  const theta=2*Math.PI*u, phi=Math.acos(2*v-1);
+  const dir=new THREE.Vector3(
     Math.sin(phi)*Math.cos(theta),
     Math.cos(phi),
     Math.sin(phi)*Math.sin(theta)
@@ -69,61 +75,83 @@ function randomInShell(r0, r1){
 
 for(let i=0;i<ORB_COUNT;i++){
   const p = randomInShell(R_MIN, R_MAX);
-  positions[i] = p;
-  // small random velocities
-  const vel = new THREE.Vector3((Math.random()-0.5), (Math.random()-0.5), (Math.random()-0.5)).multiplyScalar(0.6);
-  velocities[i] = vel;
-  dummy.position.copy(p);
-  dummy.updateMatrix();
-  orbs.setMatrixAt(i, dummy.matrix);
-}
-orbs.instanceMatrix.needsUpdate = true;
+  pos[i*3+0]=p.x; pos[i*3+1]=p.y; pos[i*3+2]=p.z;
 
-// --- Resize
+  // random direction at constant speed
+  const dir = randomInShell(1,1).normalize().multiplyScalar(SPEED);
+  velocities[i] = dir;
+}
+geom.setAttribute('position', new THREE.BufferAttribute(pos,3));
+
+const mat = new THREE.PointsMaterial({
+  map: spriteTex,
+  transparent: true,
+  depthWrite: false,
+  blending: THREE.AdditiveBlending,
+  opacity: 0.9,
+  size: 0.18,            // slightly smaller than before
+  sizeAttenuation: true
+});
+
+const orbs = new THREE.Points(geom, mat);
+scene.add(orbs);
+
+// Resize
 addEventListener('resize', ()=>{
   camera.aspect = innerWidth/innerHeight;
   camera.updateProjectionMatrix();
   renderer.setSize(innerWidth, innerHeight);
 });
 
-// --- Animate the swarm
+// Animate — constant-speed drift with gentle steering
 const clock = new THREE.Clock();
+const tmp = new THREE.Vector3();
 function animate(){
-  const dt = Math.min(clock.getDelta(), 0.033); // cap delta for stability
-
+  const dt = Math.min(clock.getDelta(), 0.033);
+  const arr = geom.getAttribute('position').array;
   const t = performance.now()*0.001;
-  const center = new THREE.Vector3(Math.sin(t*0.1)*2, Math.cos(t*0.13)*1.5, Math.sin(t*0.07)*1.2);
 
   for(let i=0;i<ORB_COUNT;i++){
-    const p = positions[i];
+    const ix=i*3;
+    tmp.set(arr[ix], arr[ix+1], arr[ix+2]);
+
+    // Rotate velocity slightly around a time-varying axis (no acceleration spike)
     const v = velocities[i];
+    const axis = new THREE.Vector3(
+      Math.sin(0.37*i + t*0.9),
+      Math.cos(0.23*i + t*1.1),
+      Math.sin(0.19*i - t*0.7)
+    ).normalize();
+    v.applyAxisAngle(axis, 0.15*dt);
 
-    // gentle drift + slight attraction to a moving centroid
-    const toCenter = center.clone().sub(p).multiplyScalar(0.02);
-    v.addScaledVector(toCenter, dt);
+    // Maintain constant speed
+    v.setLength(SPEED);
 
-    // small curl-like rotation around Y for variety
-    v.add(new THREE.Vector3(-p.z, 0, p.x).multiplyScalar(0.0004));
+    // Integrate
+    tmp.addScaledVector(v, dt);
 
-    p.addScaledVector(v, dt);
-
-    const len = p.length();
+    // Keep inside spherical shell (reflect if out of bounds)
+    let len = tmp.length();
     if(len > R_MAX){
-      // bounce back in
-      p.multiplyScalar(R_MAX/len);
-      v.multiplyScalar(-0.6);
-    } else if(len < R_MIN*0.6){
-      // nudge outward if too close to camera
-      const dir = p.clone().normalize().multiplyScalar((R_MIN*0.8) - len);
-      p.addScaledVector(dir, 0.5);
+      const n = tmp.clone().normalize();
+      const dot = v.dot(n);
+      v.addScaledVector(n, -2*dot);      // reflect
+      v.setLength(SPEED);
+      tmp.setLength(R_MAX-0.001);
+    }
+    if(len < R_MIN*0.5){
+      const n = tmp.clone().normalize();
+      const dot = v.dot(n);
+      v.addScaledVector(n, -2*dot);      // bounce outward
+      v.setLength(SPEED);
+      tmp.setLength(R_MIN*0.5+0.001);
     }
 
-    dummy.position.copy(p);
-    dummy.rotation.y += dt*0.5; // subtle spin for sparkle
-    dummy.updateMatrix();
-    orbs.setMatrixAt(i, dummy.matrix);
+    // Write back
+    arr[ix]=tmp.x; arr[ix+1]=tmp.y; arr[ix+2]=tmp.z;
   }
-  orbs.instanceMatrix.needsUpdate = true;
+
+  geom.attributes.position.needsUpdate = true;
 
   controls.update();
   renderer.render(scene, camera);
