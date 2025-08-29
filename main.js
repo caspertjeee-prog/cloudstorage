@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'https://unpkg.com/three@0.160.0/examples/jsm/controls/OrbitControls.js?module';
 import { RGBELoader } from 'https://unpkg.com/three@0.160.0/examples/jsm/loaders/RGBELoader.js?module';
 
-// --- Renderer
+// ===== Scene setup =====
 const canvas = document.getElementById('app');
 const renderer = new THREE.WebGLRenderer({ canvas, antialias:true, powerPreference:'high-performance' });
 renderer.outputColorSpace = THREE.SRGBColorSpace;
@@ -11,150 +11,190 @@ renderer.toneMappingExposure = 0.9;
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
 renderer.setSize(innerWidth, innerHeight);
 
-// --- Scene & Camera
 const scene = new THREE.Scene();
-const camera = new THREE.PerspectiveCamera(60, innerWidth/innerHeight, 0.1, 200);
+const camera = new THREE.PerspectiveCamera(60, innerWidth/innerHeight, 0.1, 300);
 camera.position.set(0, 0.5, 5);
 
-// Controls
 const controls = new OrbitControls(camera, renderer.domElement);
-controls.enableDamping = true;
-controls.enablePan = false;
-controls.minDistance = 2.0;
-controls.maxDistance = 12.0;
-controls.minPolarAngle = 0.05;
-controls.maxPolarAngle = Math.PI - 0.05;
+controls.enableDamping = true; controls.enablePan = false;
+controls.minDistance = 2.0; controls.maxDistance = 12.0;
+controls.minPolarAngle = 0.05; controls.maxPolarAngle = Math.PI - 0.05;
 
-// Ambient light for a tiny bit of lift (sprites glow via additive blending)
-scene.add(new THREE.AmbientLight(0xffffff, 0.4));
+scene.add(new THREE.AmbientLight(0xffffff, 0.5));
 
-// --- HDRI background/environment
 new RGBELoader().setPath('./').load('hdri.hdr', (hdr)=>{
   hdr.mapping = THREE.EquirectangularReflectionMapping;
-  scene.background = hdr;
-  scene.environment = hdr;
+  scene.background = hdr; scene.environment = hdr;
 });
 
-// ---------------- Glowing “orbs” as sprites (Points) ----------------
-const ORB_COUNT = 500;
-const R_MIN = 12;   // keep many orbs behind you even fully zoomed out
-const R_MAX = 30;
-const SPEED   = 0.35; // units/sec — slow & constant
+// ===== Data & storage =====
+const STORE_KEY = 'spacestorage:v1';
+let notes = {}; // { id: {title:'', body:''} }
+try { notes = JSON.parse(localStorage.getItem(STORE_KEY) || '{}'); } catch {}
+const saveNotes = () => localStorage.setItem(STORE_KEY, JSON.stringify(notes));
 
-// Soft radial sprite texture (glow)
-function makeSoftSprite(size=256){
+// ===== Orb field using Sprites (easier per-orb interaction) =====
+const ORB_COUNT = 500;
+const R_MIN = 12, R_MAX = 30;
+const SPEED = 0.35; // units per second (constant)
+
+function makeGlowSprite(size=256){
   const c=document.createElement('canvas'); c.width=c.height=size;
   const ctx=c.getContext('2d');
   const g=ctx.createRadialGradient(size/2,size/2,0,size/2,size/2,size/2);
-  g.addColorStop(0.00,'rgba(255,255,255,0.95)');
-  g.addColorStop(0.35,'rgba(255,255,255,0.35)');
-  g.addColorStop(1.00,'rgba(255,255,255,0.00)');
+  g.addColorStop(0,'rgba(255,255,255,0.95)');
+  g.addColorStop(0.35,'rgba(200,220,255,0.35)');
+  g.addColorStop(1,'rgba(255,255,255,0)');
   ctx.fillStyle=g; ctx.fillRect(0,0,size,size);
   const tex=new THREE.CanvasTexture(c);
-  tex.minFilter=THREE.LinearFilter; tex.magFilter=THREE.LinearFilter;
-  return tex;
+  tex.minFilter=THREE.LinearFilter; tex.magFilter=THREE.LinearFilter; return tex;
 }
-const spriteTex = makeSoftSprite();
+const spriteMap = makeGlowSprite();
 
-// Geometry & data
-const geom = new THREE.BufferGeometry();
-const pos = new Float32Array(ORB_COUNT*3);
-const velocities = new Array(ORB_COUNT);
+const sprites = [];            // THREE.Sprite[]
+const velocities = [];         // THREE.Vector3[]
+const baseScales = [];         // Vector2 (per-sprite base scale)
 
-function randomInShell(r0,r1){
+function randomDir(){
   const u=Math.random(), v=Math.random();
   const theta=2*Math.PI*u, phi=Math.acos(2*v-1);
-  const dir=new THREE.Vector3(
+  return new THREE.Vector3(
     Math.sin(phi)*Math.cos(theta),
     Math.cos(phi),
     Math.sin(phi)*Math.sin(theta)
   );
-  const r = r0 + Math.random()*(r1-r0);
-  return dir.multiplyScalar(r);
 }
+function randomInShell(r0,r1){ return randomDir().multiplyScalar(r0 + Math.random()*(r1-r0)); }
 
-for(let i=0;i<ORB_COUNT;i++){
+for(let id=0; id<ORB_COUNT; id++){
+  const mat = new THREE.SpriteMaterial({ map:spriteMap, color:0xffffff, blending:THREE.AdditiveBlending, depthWrite:false, transparent:true, opacity:0.9 });
+  const spr = new THREE.Sprite(mat);
   const p = randomInShell(R_MIN, R_MAX);
-  pos[i*3+0]=p.x; pos[i*3+1]=p.y; pos[i*3+2]=p.z;
+  spr.position.copy(p);
+  // Slight size variation
+  const s = 0.22 + Math.random()*0.12; // world units (since sprites scale is world-space)
+  spr.scale.setScalar(s);
+  baseScales[id] = s;
 
-  // random direction at constant speed
-  const dir = randomInShell(1,1).normalize().multiplyScalar(SPEED);
-  velocities[i] = dir;
+  spr.userData = { id };
+  sprites.push(spr);
+  scene.add(spr);
+
+  const v = randomDir().setLength(SPEED);
+  velocities[id] = v;
 }
-geom.setAttribute('position', new THREE.BufferAttribute(pos,3));
 
-const mat = new THREE.PointsMaterial({
-  map: spriteTex,
-  transparent: true,
-  depthWrite: false,
-  blending: THREE.AdditiveBlending,
-  opacity: 0.9,
-  size: 0.18,            // slightly smaller than before
-  sizeAttenuation: true
+// ===== Interaction (hover & click) =====
+const raycaster = new THREE.Raycaster();
+const mouse = new THREE.Vector2();
+let hovered = null; // Sprite
+let openId = null;  // number | null
+
+function onPointerMove(e){
+  const rect = renderer.domElement.getBoundingClientRect();
+  mouse.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+  mouse.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+}
+window.addEventListener('pointermove', onPointerMove);
+
+function updateHover(){
+  raycaster.setFromCamera(mouse, camera);
+  const hits = raycaster.intersectObjects(sprites, false);
+  const hit = hits.length ? hits[0].object : null;
+  if(hit !== hovered){
+    // restore previous
+    if(hovered){ hovered.scale.setScalar(baseScales[hovered.userData.id]); }
+    hovered = hit;
+    if(hovered){ hovered.scale.setScalar(baseScales[hovered.userData.id] * 1.6); }
+  }
+}
+
+window.addEventListener('click', (e)=>{
+  if(!hovered || overlay.classList.contains('open')) return;
+  openNote(hovered.userData.id);
 });
 
-const orbs = new THREE.Points(geom, mat);
-scene.add(orbs);
+// ===== Overlay UI logic =====
+const overlay = document.getElementById('overlay');
+const backdrop = document.getElementById('backdrop');
+const titleEl = document.getElementById('title');
+const bodyEl  = document.getElementById('body');
+const saveBtn = document.getElementById('saveBtn');
+const closeBtn= document.getElementById('closeBtn');
 
-// Resize
-addEventListener('resize', ()=>{
-  camera.aspect = innerWidth/innerHeight;
-  camera.updateProjectionMatrix();
-  renderer.setSize(innerWidth, innerHeight);
+function openNote(id){
+  openId = id;
+  const data = notes[id] || { title:'', body:'' };
+  titleEl.value = data.title || '';
+  bodyEl.value  = data.body  || '';
+  overlay.classList.add('open');
+  overlay.setAttribute('aria-hidden','false');
+  controls.enabled = false; // pause orbit while editing
+  titleEl.focus();
+}
+function closeNote(){
+  overlay.classList.remove('open');
+  overlay.setAttribute('aria-hidden','true');
+  controls.enabled = true;
+  openId = null;
+}
+backdrop.addEventListener('click', closeNote);
+closeBtn.addEventListener('click', closeNote);
+window.addEventListener('keydown', (e)=>{ if(e.key==='Escape' && overlay.classList.contains('open')) closeNote(); });
+
+saveBtn.addEventListener('click', ()=>{
+  if(openId==null) return;
+  notes[openId] = {
+    title: titleEl.value.slice(0,120),
+    body:  bodyEl.value.slice(0,10000)
+  };
+  saveNotes();
+  closeNote();
 });
 
-// Animate — constant-speed drift with gentle steering
-const clock = new THREE.Clock();
+// ===== Animation loop (constant-speed drift with shell constraints) =====
 const tmp = new THREE.Vector3();
-function animate(){
+const clock = new THREE.Clock();
+function tick(){
   const dt = Math.min(clock.getDelta(), 0.033);
-  const arr = geom.getAttribute('position').array;
   const t = performance.now()*0.001;
 
   for(let i=0;i<ORB_COUNT;i++){
-    const ix=i*3;
-    tmp.set(arr[ix], arr[ix+1], arr[ix+2]);
-
-    // Rotate velocity slightly around a time-varying axis (no acceleration spike)
+    const spr = sprites[i];
     const v = velocities[i];
+
+    // gentle steering (rotate velocity a bit around a time-varying axis)
     const axis = new THREE.Vector3(
       Math.sin(0.37*i + t*0.9),
       Math.cos(0.23*i + t*1.1),
       Math.sin(0.19*i - t*0.7)
     ).normalize();
-    v.applyAxisAngle(axis, 0.15*dt);
-
-    // Maintain constant speed
+    v.applyAxisAngle(axis, 0.12*dt);
     v.setLength(SPEED);
 
-    // Integrate
-    tmp.addScaledVector(v, dt);
+    spr.position.addScaledVector(v, dt);
 
-    // Keep inside spherical shell (reflect if out of bounds)
-    let len = tmp.length();
+    // shell boundaries
+    const len = spr.position.length();
     if(len > R_MAX){
-      const n = tmp.clone().normalize();
+      const n = spr.position.clone().normalize();
       const dot = v.dot(n);
-      v.addScaledVector(n, -2*dot);      // reflect
+      v.addScaledVector(n, -2*dot);
       v.setLength(SPEED);
-      tmp.setLength(R_MAX-0.001);
+      spr.position.setLength(R_MAX-0.001);
     }
     if(len < R_MIN*0.5){
-      const n = tmp.clone().normalize();
+      const n = spr.position.clone().normalize();
       const dot = v.dot(n);
-      v.addScaledVector(n, -2*dot);      // bounce outward
+      v.addScaledVector(n, -2*dot); // bounce outward
       v.setLength(SPEED);
-      tmp.setLength(R_MIN*0.5+0.001);
+      spr.position.setLength(R_MIN*0.5+0.001);
     }
-
-    // Write back
-    arr[ix]=tmp.x; arr[ix+1]=tmp.y; arr[ix+2]=tmp.z;
   }
 
-  geom.attributes.position.needsUpdate = true;
-
+  updateHover();
   controls.update();
   renderer.render(scene, camera);
-  requestAnimationFrame(animate);
+  requestAnimationFrame(tick);
 }
-requestAnimationFrame(animate);
+requestAnimationFrame(tick);
