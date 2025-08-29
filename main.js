@@ -54,7 +54,7 @@ async function deleteNote(id) {
 }
 
 // ---------- Orb field (sprites) ----------
-const ORB_COUNT = 500;
+const ORB_COUNT = 10;
 const R_MIN = 12;
 const R_MAX = 30;
 const SPEED = 0.35; // units/sec — slow & constant
