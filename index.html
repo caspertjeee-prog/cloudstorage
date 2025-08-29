@@ -1,18 +1,24 @@
-<!-- ===== Step 1: HDRI-only (no objects) ===== -->
-<!-- File: index.html -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>HDRI Background Only</title>
+  <title>Cloud + HDRI</title>
   <style>
     html, body { height: 100%; margin: 0; }
-    body { background: #000; overflow: hidden; }
-    #app { position: fixed; inset: 0; }
-    .debug { position: fixed; right: 12px; bottom: 12px; color: #fff; font: 12px system-ui; opacity: 0.85; }
-    .hint { position: fixed; left: 12px; bottom: 12px; color: #fff; font: 12px system-ui; opacity: 0.85; background: rgba(0,0,0,0.45); padding: 6px 8px; border-radius: 6px; }
+    body { background:#000; overflow:hidden; }
+    #app { position:fixed; inset:0; }
+    .hint { position:fixed; left:12px; bottom:12px; color:#fff; font:12px system-ui;
+            background:rgba(0,0,0,.45); padding:6px 8px; border-radius:6px; }
+    .debug { position:fixed; right:12px; bottom:12px; color:#fff; font:12px system-ui; opacity:.85; }
   </style>
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://unpkg.com/three@0.160.0/build/three.module.js"
+    }
+  }
+  </script>
 </head>
 <body>
   <canvas id="app"></canvas>
@@ -21,58 +27,3 @@
   <script type="module" src="./main.js"></script>
 </body>
 </html>
-
-<!-- File: main.js -->
-import * as THREE from 'https://unpkg.com/three@0.160.0/build/three.module.js';
-import { OrbitControls } from 'https://unpkg.com/three@0.160.0/examples/jsm/controls/OrbitControls.js';
-import { RGBELoader } from 'https://unpkg.com/three@0.160.0/examples/jsm/loaders/RGBELoader.js';
-
-const dbg = document.getElementById('debug');
-
-// Renderer
-const canvas = document.getElementById('app');
-const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: false, powerPreference: 'high-performance' });
-renderer.outputColorSpace = THREE.SRGBColorSpace;
-renderer.toneMapping = THREE.ACESFilmicToneMapping;
-renderer.toneMappingExposure = 1.0;
-renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
-renderer.setSize(innerWidth, innerHeight);
-
-// Scene & camera
-const scene = new THREE.Scene();
-const camera = new THREE.PerspectiveCamera(60, innerWidth / innerHeight, 0.1, 1000);
-camera.position.set(0, 0, 1); // close since there is no geometry
-
-// Controls (so you can look around the HDRI)
-const controls = new OrbitControls(camera, renderer.domElement);
-controls.enableDamping = true;
-controls.enablePan = false;
-controls.minDistance = 0.5;
-controls.maxDistance = 5;
-
-// Resize
-addEventListener('resize', () => {
-  camera.aspect = innerWidth / innerHeight;
-  camera.updateProjectionMatrix();
-  renderer.setSize(innerWidth, innerHeight);
-});
-
-// Load HDRI as background
-const loader = new RGBELoader().setPath('./'); // expects hdri.hdr next to index.html
-loader.load('hdri.hdr', (hdr) => {
-  hdr.mapping = THREE.EquirectangularReflectionMapping;
-  scene.background = hdr; // show the panorama
-  dbg.textContent = 'HDRI loaded';
-  animate();
-}, undefined, (err) => {
-  console.warn('HDRI failed to load', err);
-  dbg.textContent = 'HDRI failed to load (check name/path)';
-  // Still start render loop so you see something (black bg) and can check controls
-  animate();
-});
-
-function animate() {
-  controls.update();
-  renderer.render(scene, camera);
-  requestAnimationFrame(animate);
-}
