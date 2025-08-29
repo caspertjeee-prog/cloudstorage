@@ -33,7 +33,7 @@ let notes = {}; // { id: {title:'', body:''} }
 try { notes = JSON.parse(localStorage.getItem(STORE_KEY) || '{}'); } catch {}
 const saveNotes = () => localStorage.setItem(STORE_KEY, JSON.stringify(notes));
 
-// ===== Orb field using Sprites (easier per-orb interaction) =====
+// ===== Orb field using Sprites (for interaction) =====
 const ORB_COUNT = 500;
 const R_MIN = 12, R_MAX = 30;
 const SPEED = 0.35; // units per second (constant)
@@ -45,7 +45,7 @@ function makeGlowSprite(size=256){
   g.addColorStop(0,'rgba(255,255,255,0.95)');
   g.addColorStop(0.35,'rgba(200,220,255,0.35)');
   g.addColorStop(1,'rgba(255,255,255,0)');
-  ctx.fillStyle=g; ctx.fillRect(0,0,size,size);
+  ctx.fillStyle=g; ctx.fillRect(0,0,size, size);
   const tex=new THREE.CanvasTexture(c);
   tex.minFilter=THREE.LinearFilter; tex.magFilter=THREE.LinearFilter; return tex;
 }
@@ -53,7 +53,7 @@ const spriteMap = makeGlowSprite();
 
 const sprites = [];            // THREE.Sprite[]
 const velocities = [];         // THREE.Vector3[]
-const baseScales = [];         // Vector2 (per-sprite base scale)
+const baseScales = [];         // Number per sprite
 
 function randomDir(){
   const u=Math.random(), v=Math.random();
@@ -71,17 +71,13 @@ for(let id=0; id<ORB_COUNT; id++){
   const spr = new THREE.Sprite(mat);
   const p = randomInShell(R_MIN, R_MAX);
   spr.position.copy(p);
-  // Slight size variation
-  const s = 0.22 + Math.random()*0.12; // world units (since sprites scale is world-space)
+  const s = 0.22 + Math.random()*0.12; // size
   spr.scale.setScalar(s);
   baseScales[id] = s;
-
   spr.userData = { id };
   sprites.push(spr);
   scene.add(spr);
-
-  const v = randomDir().setLength(SPEED);
-  velocities[id] = v;
+  velocities[id] = randomDir().setLength(SPEED);
 }
 
 // ===== Interaction (hover & click) =====
@@ -102,14 +98,13 @@ function updateHover(){
   const hits = raycaster.intersectObjects(sprites, false);
   const hit = hits.length ? hits[0].object : null;
   if(hit !== hovered){
-    // restore previous
     if(hovered){ hovered.scale.setScalar(baseScales[hovered.userData.id]); }
     hovered = hit;
     if(hovered){ hovered.scale.setScalar(baseScales[hovered.userData.id] * 1.6); }
   }
 }
 
-window.addEventListener('click', (e)=>{
+window.addEventListener('click', ()=>{
   if(!hovered || overlay.classList.contains('open')) return;
   openNote(hovered.userData.id);
 });
@@ -121,15 +116,17 @@ const titleEl = document.getElementById('title');
 const bodyEl  = document.getElementById('body');
 const saveBtn = document.getElementById('saveBtn');
 const closeBtn= document.getElementById('closeBtn');
+const dlgTitle= document.getElementById('dlgTitle');
 
 function openNote(id){
   openId = id;
   const data = notes[id] || { title:'', body:'' };
+  dlgTitle.textContent = `Memory #${id}`; // dynamic title
   titleEl.value = data.title || '';
   bodyEl.value  = data.body  || '';
   overlay.classList.add('open');
   overlay.setAttribute('aria-hidden','false');
-  controls.enabled = false; // pause orbit while editing
+  controls.enabled = true; // keep orbit active if you like; set false to lock camera
   titleEl.focus();
 }
 function closeNote(){
@@ -152,8 +149,7 @@ saveBtn.addEventListener('click', ()=>{
   closeNote();
 });
 
-// ===== Animation loop (constant-speed drift with shell constraints) =====
-const tmp = new THREE.Vector3();
+// ===== Animation loop =====
 const clock = new THREE.Clock();
 function tick(){
   const dt = Math.min(clock.getDelta(), 0.033);
@@ -162,8 +158,6 @@ function tick(){
   for(let i=0;i<ORB_COUNT;i++){
     const spr = sprites[i];
     const v = velocities[i];
-
-    // gentle steering (rotate velocity a bit around a time-varying axis)
     const axis = new THREE.Vector3(
       Math.sin(0.37*i + t*0.9),
       Math.cos(0.23*i + t*1.1),
@@ -171,23 +165,17 @@ function tick(){
     ).normalize();
     v.applyAxisAngle(axis, 0.12*dt);
     v.setLength(SPEED);
-
     spr.position.addScaledVector(v, dt);
 
-    // shell boundaries
     const len = spr.position.length();
     if(len > R_MAX){
       const n = spr.position.clone().normalize();
-      const dot = v.dot(n);
-      v.addScaledVector(n, -2*dot);
-      v.setLength(SPEED);
+      const dot = v.dot(n); v.addScaledVector(n, -2*dot); v.setLength(SPEED);
       spr.position.setLength(R_MAX-0.001);
     }
     if(len < R_MIN*0.5){
       const n = spr.position.clone().normalize();
-      const dot = v.dot(n);
-      v.addScaledVector(n, -2*dot); // bounce outward
-      v.setLength(SPEED);
+      const dot = v.dot(n); v.addScaledVector(n, -2*dot); v.setLength(SPEED);
       spr.position.setLength(R_MIN*0.5+0.001);
     }
   }
