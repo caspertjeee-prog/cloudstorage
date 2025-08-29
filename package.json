@@ -1,0 +1,8 @@
+{
+  "name": "spacestorage",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@upstash/redis": "^1.29.2"
+  }
+}
